@@ -5,17 +5,28 @@ import datetime
 from pathlib import Path
 
 # ==================== CONFIGURATION ====================
-# path to your local Logseq "journals" folder:
+# Paths to your local Logseq directories
+# JOURNALS_DIR = r"/home/user/Documents/LogSeq/journals" 
 # JOURNALS_DIR = r"C:\Users\YourName\Documents\Logseq\journals" 
-JOURNALS_DIR = r"/home/user/Documents/LogSeq/journals" 
+JOURNALS_DIR = Path.home() / "Documents/LogSeq/journals"
+PAGES_DIR = Path.home() / "Documents/LogSeq/pages"
 # =======================================================
+
+def find_case_insensitive_page(pages_dir, page_name):
+    """Finds the page markdown file on Linux by matching lowercase names."""
+    if not pages_dir.exists():
+        return None
+        
+    target_filename = f"{page_name.lower()}.md"
+    for entry in os.scandir(pages_dir):
+        if entry.is_file() and entry.name.lower() == target_filename:
+            return Path(entry.path)
+    return None
 
 def extract_linked_blocks(file_path, tag):
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    # Match raw page reference formats like [[mypage]] or #mypage or mypage
-    # Stripping brackets for flexible loose text matching
     clean_tag = tag.replace("[", "").replace("]", "").lower()
     
     extracted_content = []
@@ -29,13 +40,11 @@ def extract_linked_blocks(file_path, tag):
             
         indent_level = len(line) - len(stripped)
 
-        # Case 1: Looking for a new parent block containing the tag
         if not inside_target_block:
             if clean_tag in line.lower():
                 inside_target_block = True
                 target_indent = indent_level
                 extracted_content.append(line)
-        # Case 2: Currently inside a target block's tree
         else:
             if indent_level <= target_indent:
                 if clean_tag in line.lower():
@@ -47,48 +56,59 @@ def extract_linked_blocks(file_path, tag):
                 extracted_content.append(line)
 
     return "".join(extracted_content)
-
+    
 def main():
-    # 1. Parse target tag parameter from command line
     if len(sys.argv) < 2:
         print("Error: Missing target tag parameter.")
-        print("Usage: python logseqPageExport.py <tag_or_page_name>")
-        print("Example: python logseqPageExport.py mypage")
+        print("Usage: python export_logseq.py <tag_or_page_name>")
+        print("Example: python export_logseq.py fastmail")
         sys.exit(1)
         
     raw_tag = sys.argv[1]
     
-    # 2. Form search tag string (supports loose inputs like "mypage" or "[[mypage]]")
     search_tag = raw_tag if raw_tag.startswith("[[") else f"[[{raw_tag}]]"
     safe_filename_tag = raw_tag.replace("[", "").replace("]", "").replace(" ", "_")
 
-    journals_path = Path(JOURNALS_DIR)
-    if not journals_path.exists():
-        print(f"Error: The directory '{JOURNALS_DIR}' does not exist. Check script line 8.")
+    # 1. Read and prepend the core Page file text if it exists
+    page_content = ""
+    matched_page_path = find_case_insensitive_page(PAGES_DIR, raw_tag)
+    
+    if matched_page_path and matched_page_path.exists():
+        print(f"Found core page file: {matched_page_path.name}")
+        with open(matched_page_path, "r", encoding="utf-8") as f:
+            page_content = f.read().strip()
+            if page_content:
+                page_content = f"# Core Page: {raw_tag}\n\n{page_content}\n\n"
+    else:
+        print(f"⚠️ Note: No core page file found for '{raw_tag}' in {PAGES_DIR}. Skipping prepend.")
+
+    # 2. Extract references from Journal files
+    if not JOURNALS_DIR.exists():
+        print(f"Error: The directory '{JOURNALS_DIR}' does not exist. Check configuration.")
         return
 
-    # 3. Read and sort journal markdown files
-    journal_files = sorted(list(journals_path.glob("*.md")))
-    final_output = []
+    journal_files = sorted(list(JOURNALS_DIR.glob("*.md")))
+    journal_output = []
 
     for file_path in journal_files:
         date_str = file_path.stem.replace("_", "-")
         blocks = extract_linked_blocks(file_path, search_tag)
         if blocks:
-            final_output.append(f"# {date_str}\n\n{blocks}\n")
+            journal_output.append(f"# {date_str}\n\n{blocks}\n")
 
-    # 4. Generate dynamic output timestamp: Tag_YYYYMMDD-HH.md
-    if final_output:
+    # 3. Assemble and export to Current Working Directory
+    if page_content or journal_output:
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H")
         output_filename = f"{safe_filename_tag}_{timestamp}.md"
-        # output_file = journals_path.parent / output_filename
         output_file = Path.cwd() / output_filename
         
+        full_markdown_payload = page_content + "\n".join(journal_output)
+        
         with open(output_file, "w", encoding="utf-8") as f:
-            f.write("\n".join(final_output))
-        print(f"✅ Success! Compiled file saved to: {output_file}")
+            f.write(full_markdown_payload.strip() + "\n")
+        print(f"✅ Success! Output saved to your current directory: {output_file}")
     else:
-        print(f"No block hierarchies found containing '{search_tag}'")
+        print(f"⚠️ No contents or journal block hierarchies found for '{search_tag}'")
 
 if __name__ == "__main__":
     main()
